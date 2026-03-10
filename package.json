@@ -1,0 +1,22 @@
+{
+  "name": "@feedback-system/bot",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "grammy": "^1.37.0",
+    "@grammyjs/conversations": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.5",
+    "tsx": "^3.12.7",
+    "typescript": "^5.2.2"
+  }
+}
