@@ -1,7 +1,8 @@
 // Removed conversations import - using simpler approach
 import * as dotenv from 'dotenv';
 import { Bot, Context, InlineKeyboard, MemorySessionStorage, session, SessionFlavor } from 'grammy';
-import { submitFeedback, validateQrCode, getStaffByLocation, findOrCreateCustomer, checkUser } from './api';
+import { submitFeedback, validateQrCode, getStaffByLocation, findOrCreateCustomer, checkUser, linkTelegramAccount } from './api';
+import { LINK_REPLIES, linkFailureReply, linkSuccessReply, routeStartPayload } from './start-route';
 
 dotenv.config();
 
@@ -91,7 +92,8 @@ bot.use(async (ctx, next) => {
   // Check if this is a new QR scan (/start command with token)
   if (ctx.message?.text?.startsWith('/start ')) {
     const token = ctx.message.text.split(' ')[1];
-    if (token && ctx.session?.isInConversation) {
+    // An account link (link_<code>) is not a QR scan: it goes on to the /start handler.
+    if (token && routeStartPayload(token).kind === 'qr' && ctx.session?.isInConversation) {
       console.log('New QR scan detected during active feedback:', token);
       await handleNewQrScanDuringFeedback(ctx, token);
       return; // Don't continue to other handlers
@@ -436,10 +438,48 @@ bot.command('cancel', async (ctx) => {
   await ctx.reply(FEEDBACK_QUESTIONS.CANCELLED);
 });
 
+// Feekr 2.0: "/start link_<code>" links this Telegram account to a Feekr owner or branch manager,
+// so low-rating alerts can reach them. Whatever happens here ends here with a calm reply: it never
+// throws and never touches the feedback session. The code is never logged.
+async function handleAccountLink(ctx: MyContext, code: string | null) {
+  try {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    if (ctx.chat?.type !== 'private') {
+      await ctx.reply(LINK_REPLIES.PRIVATE_ONLY);
+      return;
+    }
+    if (!code) {
+      await ctx.reply(LINK_REPLIES.INVALID);
+      return;
+    }
+    const name =
+      [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(' ') ||
+      (ctx.from?.username ? `@${ctx.from.username}` : undefined);
+    const { data } = await linkTelegramAccount({ code, chatId: String(chatId), name });
+    await ctx.reply(linkSuccessReply(data?.businessName));
+  } catch (error) {
+    const status: number | undefined = (error as any)?.response?.status;
+    console.error('Account link failed, API status:', status ?? 'no response');
+    try {
+      await ctx.reply(linkFailureReply(status));
+    } catch (replyError) {
+      console.error('Could not send the account link reply');
+    }
+  }
+}
+
 // Handle the start command
 bot.command('start', async (ctx) => {
   const startParam = ctx.message?.text?.split(' ')[1];
   const chatId = ctx.chat?.id;
+
+  // Account linking comes first and never reaches the QR flow below.
+  const startRoute = routeStartPayload(startParam);
+  if (startRoute.kind === 'link') {
+    await handleAccountLink(ctx, startRoute.code);
+    return;
+  }
   
   console.log('Start command received');
   console.log('Start param:', startParam);

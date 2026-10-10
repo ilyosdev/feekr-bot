@@ -84,3 +84,22 @@ export const findOrCreateCustomer = (payload: CreateCustomerPayload): Promise<{ 
 export const checkUser = (telegramChatId: string): Promise<{ data: Customer | null }> => {
   return api.get(`/customers/check-user/${telegramChatId}`);
 };
+
+// Feekr 2.0: links this Telegram chat to an owner or a branch manager (low-rating alerts).
+// Only this call carries the bot key; the customer flow above is untouched.
+export interface LinkTelegramResult {
+  ok: true;
+  role: 'owner' | 'manager';
+  businessName: string | null;
+}
+
+export const linkTelegramAccount = (payload: {
+  code: string;
+  chatId: string;
+  name?: string;
+}): Promise<{ data: LinkTelegramResult }> => {
+  return api.post('/telegram/link', payload, {
+    headers: { 'X-Bot-Key': process.env.BOT_API_KEY ?? '' },
+    timeout: 8000,
+  });
+};
