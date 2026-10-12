@@ -297,6 +297,14 @@ async function handleFeedbackStep(ctx: MyContext, state: ConversationState) {
       await showNextQuestion(ctx, state, chatId);
     }
   } else {
+    // A staff QR names the staff member itself, so there is nobody to pick: the first question comes next.
+    // Left at 'staff_selection' the session has no question to show and the customer is stuck after the welcome.
+    if (state.step === 'staff_selection') {
+      state.step = 'found_question';
+      ctx.session.conversationState = state;
+      conversationDataStore.set(chatId, state);
+    }
+
     // For staff QR or continuing from previous step
     await showNextQuestion(ctx, state, chatId);
   }
@@ -778,4 +786,10 @@ async function startBot() {
   }
 }
 
-startBot();
+// Started only when this file is the program (node dist/index.js, tsx src/index.ts).
+// A test imports the bot and feeds it updates, without polling and without Telegram.
+if (require.main === module) {
+  startBot();
+}
+
+export { bot };
