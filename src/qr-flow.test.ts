@@ -84,7 +84,7 @@ interface Sent {
 }
 
 const sent: Sent[] = [];
-const onScreen = new Map<number, string[]>(); // per chat: the inline buttons of the bot's last message
+const onScreen = new Map<number, Set<string>>(); // per chat: the inline buttons the bot has sent since the scan
 let server: http.Server;
 let bot: typeof import('./index').bot;
 let updateId = 0;
@@ -120,7 +120,9 @@ before(async () => {
         buttons,
         asksContact: !!message.reply_markup?.keyboard?.[0]?.[0]?.request_contact,
       });
-      onScreen.set(message.chat_id, buttons);
+      const shown = onScreen.get(message.chat_id) ?? new Set<string>();
+      buttons.forEach((button) => shown.add(button));
+      onScreen.set(message.chat_id, shown);
       return { ok: true, result: { message_id: sent.length, date: 0, chat: { id: message.chat_id, type: 'private' }, text: message.text } } as any;
     }
     return { ok: true, result: true } as any;
@@ -144,8 +146,9 @@ async function deliver(update: Record<string, unknown>): Promise<Sent[]> {
   return sent.slice(from);
 }
 
-const says = (id: number, text: string) =>
-  deliver({
+const says = (id: number, text: string) => {
+  if (text.startsWith('/start')) onScreen.delete(id); // a new scan: what was offered before no longer counts
+  return deliver({
     message: {
       message_id: updateId + 1,
       date: 0,
@@ -155,6 +158,7 @@ const says = (id: number, text: string) =>
       ...(text.startsWith('/') ? { entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0].length }] } : {}),
     },
   });
+};
 
 const sharesPhone = (id: number) =>
   deliver({
@@ -167,9 +171,9 @@ const sharesPhone = (id: number) =>
     },
   });
 
-/** A customer can only press a button the bot's last message put on the screen. */
+/** A customer can only press a button the bot has put on the screen (an inline button stays under its message). */
 const presses = (id: number, data: string) => {
-  assert.ok(onScreen.get(id)?.includes(data), `"${data}" is not on the screen of chat ${id}: ${onScreen.get(id) ?? 'no message yet'}`);
+  assert.ok(onScreen.get(id)?.has(data), `"${data}" was never offered to chat ${id}: ${[...(onScreen.get(id) ?? [])].join(', ') || 'no buttons at all'}`);
   return deliver({
     callback_query: {
       id: String(updateId + 1),
@@ -267,4 +271,102 @@ test('a location QR is as it was: the staff list first, the question after the c
     telegramChatId: '505',
     additionalComments: 'Navbat uzun edi',
   });
+});
+
+/* ------------------------------ answers typed instead of pressed ------------------------------ */
+
+test('typed answers count like the buttons: "Ha", "Yo\'q", "9", then a comment', async () => {
+  knownCustomers.add('506');
+  await says(506, `/start ${STAFF_QR}`);
+
+  const afterHa = await says(506, 'Ha');
+  assert.equal(afterHa.length, 1);
+  assert.match(afterHa[0].text, /^Kerakli ma'lumotni oldingizmi\?/);
+  assert.match((await says(506, "Yo'q"))[0].text, /^Xizmat sifatiga qanday baho berasiz\?/);
+  assert.deepEqual((await says(506, '9'))[0].buttons, ['skip_feedback', 'cancel_feedback']);
+  const end = await says(506, 'Zoʻr xizmat');
+
+  assert.equal(end[0].text, 'Rahmat! Fikr-mulohazangiz biz uchun muhim.');
+  assert.deepEqual(feedbacks.at(-1), {
+    locationId: LOCATION.id,
+    staffId: AZIZ.id,
+    qrCodeToken: STAFF_QR,
+    foundWhatWanted: true,
+    gotEnoughInfo: false,
+    staffRating: 9,
+    telegramChatId: '506',
+    additionalComments: 'Zoʻr xizmat',
+  });
+});
+
+test('a typed answer the bot cannot read gets the question again, and nothing is taken from it', async () => {
+  knownCustomers.add('507');
+  await says(507, `/start ${STAFF_QR}`);
+  const before = feedbacks.length;
+
+  const unclear = await says(507, 'balki');
+  assert.equal(unclear.length, 2);
+  assert.equal(unclear[0].text, 'Iltimos, "Ha" yoki "Yo\'q" javobini kiriting.');
+  assert.match(unclear[1].text, FIRST_QUESTION);
+  assert.deepEqual(unclear[1].buttons, FIRST_QUESTION_BUTTONS);
+
+  await says(507, 'Ҳа'); // Cyrillic
+  await presses(507, 'info_yes'); // a button still works after typing
+  const tooHigh = await says(507, '11');
+  assert.equal(tooHigh[0].text, "Iltimos, 1 dan 10 gacha bo'lgan raqam kiriting.");
+  assert.match(tooHigh[1].text, /^Xizmat sifatiga qanday baho berasiz\?/);
+  assert.ok(tooHigh[1].buttons.includes('rating_10'));
+
+  await presses(507, 'rating_3');
+  await presses(507, 'skip_feedback');
+  assert.equal(feedbacks.length, before + 1);
+  assert.deepEqual(feedbacks.at(-1), {
+    locationId: LOCATION.id,
+    staffId: AZIZ.id,
+    qrCodeToken: STAFF_QR,
+    foundWhatWanted: true,
+    gotEnoughInfo: true,
+    staffRating: 3,
+    telegramChatId: '507',
+  });
+});
+
+test('text typed while the staff list is on the screen is not an answer to the next question', async () => {
+  knownCustomers.add('508');
+  await says(508, `/start ${LOCATION_QR}`);
+
+  const replies = await says(508, 'Ha');
+
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].text, "Iltimos, yuqoridagi ro'yxatdan tanlang.");
+  // The list still works, and the first question comes only now.
+  const next = await presses(508, 'staff_none');
+  assert.match(next[0].text, FIRST_QUESTION);
+  assert.match((await says(508, 'yoq'))[0].text, /^Kerakli ma'lumotni oldingizmi\?/);
+});
+
+test('a new customer who types before sharing the phone number is asked for it again', async () => {
+  await says(509, `/start ${STAFF_QR}`);
+
+  const replies = await says(509, 'Salom');
+
+  assert.equal(replies.length, 1);
+  assert.ok(replies[0].asksContact, 'the phone button is offered again');
+  assert.match((await sharesPhone(509)).at(-1)!.text, FIRST_QUESTION);
+});
+
+test('text with no feedback in progress gets the hint to scan a code', async () => {
+  const replies = await says(510, 'Salom');
+
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].text, "Iltimos, /start buyrug'ini QR kod parametri bilan ishlating.");
+});
+
+test('a code the API does not accept (unknown or switched off) is called invalid', async () => {
+  knownCustomers.add('511');
+
+  const replies = await says(511, `/start ${'ef'.repeat(32)}`);
+
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].text, 'Bu QR kod yaroqsiz. Iltimos, toʻgʻri QR koddan foydalaning.');
 });

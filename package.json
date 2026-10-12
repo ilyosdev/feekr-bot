@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/start-route.test.js dist-test/qr-flow.test.js"
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/start-route.test.js dist-test/typed-answers.test.js dist-test/qr-flow.test.js"
   },
   "dependencies": {
     "axios": "^1.6.2",

@@ -3,6 +3,7 @@ import * as dotenv from 'dotenv';
 import { Bot, Context, InlineKeyboard, MemorySessionStorage, session, SessionFlavor } from 'grammy';
 import { submitFeedback, validateQrCode, getStaffByLocation, findOrCreateCustomer, checkUser, linkTelegramAccount } from './api';
 import { LINK_REPLIES, linkFailureReply, linkSuccessReply, routeStartPayload } from './start-route';
+import { parseRating, parseYesNo } from './typed-answers';
 
 dotenv.config();
 
@@ -17,6 +18,9 @@ interface ConversationState {
   businessName?: string;
   selectedStaffId?: number;
   step: 'staff_selection' | 'found_question' | 'info_question' | 'rating' | 'additional_feedback' | 'completed';
+  // The step whose question is on the customer's screen. While the staff list is shown, `step` is already
+  // 'found_question' but that question has not been asked yet.
+  asked?: ConversationState['step'];
   foundWhatWanted?: boolean;
   gotEnoughInfo?: boolean;
   staffRating?: number;
@@ -57,6 +61,8 @@ const FEEDBACK_QUESTIONS = {
   INVALID_RATING: "Iltimos, 1 dan 10 gacha bo'lgan raqam kiriting.",
   INVALID_YES_NO: 'Iltimos, "Ha" yoki "Yo\'q" javobini kiriting.',
   SELECT_STAFF: "Sizga kim xizmat ko'rsatdi? Quyidagi ro'yxatdan tanlang:",
+  CHOOSE_STAFF_ABOVE: "Iltimos, yuqoridagi ro'yxatdan tanlang.",
+  SHARE_PHONE: "📱 Davom etish uchun quyidagi tugma orqali telefon raqamingizni ulashing.",
   NO_STAFF_AVAILABLE: "Ushbu filialda hozircha xodimlar ro'yxati mavjud emas.",
 };
 
@@ -312,6 +318,8 @@ async function handleFeedbackStep(ctx: MyContext, state: ConversationState) {
 
 // Helper function to show the appropriate question based on current step
 async function showNextQuestion(ctx: MyContext, state: ConversationState, chatId: number) {
+  state.asked = state.step;
+
   switch (state.step) {
     case 'found_question':
       const foundKeyboard = new InlineKeyboard()
@@ -673,8 +681,8 @@ bot.on('callback_query:data', async (ctx) => {
   }
 });
 
-// Handle text messages for additional feedback
-bot.on('message:text', async (ctx) => {
+// Handle text messages: the additional feedback, or an answer typed instead of pressing a button
+bot.on('message:text', async (ctx, next) => {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
@@ -689,13 +697,74 @@ bot.on('message:text', async (ctx) => {
     }
   }
 
-  if (!state || state.step !== 'additional_feedback') {
-    return; // Not in additional feedback step, let other handlers process
+  if (!state) {
+    await next(); // No feedback in progress, let other handlers process
+    return;
   }
 
   // Handle additional feedback text
-  state.additionalComments = ctx.message.text;
-  await submitAndComplete(ctx, state, chatId);
+  if (state.step === 'additional_feedback') {
+    state.additionalComments = ctx.message.text;
+    await submitAndComplete(ctx, state, chatId);
+    return;
+  }
+
+  // A new customer who has not shared the phone number yet: the questions have not started.
+  if (state.step === 'staff_selection') {
+    await ctx.reply(FEEDBACK_QUESTIONS.SHARE_PHONE, {
+      reply_markup: {
+        keyboard: [
+          [{ text: "📱 Telefon raqamini ulashish", request_contact: true }]
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+      },
+    });
+    return;
+  }
+
+  // The staff list is on the screen: the next question has not been asked, so this is no answer to it.
+  if (state.asked !== state.step) {
+    await ctx.reply(FEEDBACK_QUESTIONS.CHOOSE_STAFF_ABOVE);
+    return;
+  }
+
+  // The questions say "(Ha / Yo'q)" and "(1 dan 10 gacha)": a typed answer counts like its button.
+  // One the bot cannot read gets the question again, with its buttons.
+  if (state.step === 'rating') {
+    const rating = parseRating(ctx.message.text);
+    if (rating === null) {
+      await ctx.reply(FEEDBACK_QUESTIONS.INVALID_RATING);
+      await showNextQuestion(ctx, state, chatId);
+      return;
+    }
+    state.staffRating = rating;
+    state.step = 'additional_feedback';
+  } else if (state.step === 'found_question' || state.step === 'info_question') {
+    const answer = parseYesNo(ctx.message.text);
+    if (answer === null) {
+      await ctx.reply(FEEDBACK_QUESTIONS.INVALID_YES_NO);
+      await showNextQuestion(ctx, state, chatId);
+      return;
+    }
+    if (state.step === 'found_question') {
+      state.foundWhatWanted = answer;
+      state.step = 'info_question';
+    } else {
+      state.gotEnoughInfo = answer;
+      state.step = 'rating';
+    }
+  } else {
+    return;
+  }
+
+  // Save state
+  if (ctx.session) {
+    ctx.session.conversationState = state;
+  }
+  conversationDataStore.set(chatId, state);
+
+  await showNextQuestion(ctx, state, chatId);
 });
 
 // Submit feedback and complete the process

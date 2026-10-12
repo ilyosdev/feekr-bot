@@ -38,7 +38,7 @@ npm test
 
 Runs, with Node's own test runner:
 
-- the unit tests of the `/start` routing (`src/start-route.ts`);
+- the unit tests of the `/start` routing (`src/start-route.ts`) and of typed answers (`src/typed-answers.ts`);
 - the customer flow of a QR scan through the bot's real handlers (`src/qr-flow.test.ts`): a staff code and a
-  branch code, from `/start` to the saved feedback. Telegram is replaced by a recorder and the API by a local
+  branch code, from `/start` to the saved feedback, with pressed and with typed answers. Telegram is replaced by a recorder and the API by a local
   server, so nothing leaves the machine and no token is needed.
