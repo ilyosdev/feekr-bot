@@ -817,7 +817,8 @@ async function submitAndComplete(ctx: MyContext, state: ConversationState, chatI
 
 // Handle any other message
 bot.on('message', async (ctx) => {
-  await ctx.reply('Iltimos, /start buyrug\'ini QR kod parametri bilan ishlating.');
+  // The plain /start greeting: a customer who writes to the bot without a feedback in progress is told how to start one.
+  await ctx.reply("👋 Assalomu alaykum! Feedback berish uchun QR kodni skanerlang yoki to'g'ri havolani bosing.");
 });
 
 // Error handler

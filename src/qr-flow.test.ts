@@ -355,11 +355,11 @@ test('a new customer who types before sharing the phone number is asked for it a
   assert.match((await sharesPhone(509)).at(-1)!.text, FIRST_QUESTION);
 });
 
-test('text with no feedback in progress gets the hint to scan a code', async () => {
+test('text with no feedback in progress gets the greeting that says how to start', async () => {
   const replies = await says(510, 'Salom');
 
   assert.equal(replies.length, 1);
-  assert.equal(replies[0].text, "Iltimos, /start buyrug'ini QR kod parametri bilan ishlating.");
+  assert.equal(replies[0].text, "👋 Assalomu alaykum! Feedback berish uchun QR kodni skanerlang yoki to'g'ri havolani bosing.");
 });
 
 test('a code the API does not accept (unknown or switched off) is called invalid', async () => {
